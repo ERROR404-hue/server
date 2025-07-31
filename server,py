@@ -1,0 +1,52 @@
+from flask import Flask, request, jsonify
+import ccxt
+import datetime
+
+app = Flask(__name__)
+
+# Binance config
+api_key = 'YOUR_BINANCE_API_KEY'
+api_secret = 'YOUR_BINANCE_SECRET_KEY'
+exchange = ccxt.binance({
+    'apiKey': api_key,
+    'secret': api_secret,
+    'enableRateLimit': True,
+    'options': {'defaultType': 'spot'}
+})
+
+def log_trade(info):
+    print(f"[{datetime.datetime.now()}] {info}")
+    with open("trade_log.txt", "a") as f:
+        f.write(f"[{datetime.datetime.now()}] {info}\n")
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    pair = data.get("pair")
+    side = data.get("side")  # "buy" or "sell"
+    qty_percent = float(data.get("position_size", "100").replace('%', '')) / 100
+
+    try:
+        balance = exchange.fetch_balance()
+        usdt = balance['total']['USDT']
+        ticker = exchange.fetch_ticker(pair)
+        price = ticker['last']
+        qty = (usdt * qty_percent) / price
+        qty = round(qty, 5)
+
+        if side == "buy":
+            order = exchange.create_market_buy_order(pair, qty)
+        elif side == "sell":
+            order = exchange.create_market_sell_order(pair, qty)
+        else:
+            return jsonify({"error": "Invalid side"}), 400
+
+        log_trade(f"{side.upper()} {pair} | Qty: {qty} | Price: {price}")
+        return jsonify({"success": True, "order": order})
+
+    except Exception as e:
+        log_trade(f"ERROR: {e}")
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run()
