@@ -1,52 +1,84 @@
+import os
 from flask import Flask, request, jsonify
-import ccxt
-import datetime
+from datetime import datetime
+from dotenv import load_dotenv
+import logging
 
+# Load env vars
+load_dotenv()
+
+# Setup Flask app
 app = Flask(__name__)
 
-# Binance config
-api_key = 'YOUR_BINANCE_API_KEY'
-api_secret = 'YOUR_BINANCE_SECRET_KEY'
-exchange = ccxt.binance({
-    'apiKey': api_key,
-    'secret': api_secret,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
+# Setup logging
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+log_filename = datetime.now().strftime("%Y-%m-%d") + ".log"
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, log_filename),
+    level=logging.INFO,
+    format="%(asctime)s - %(message)s"
+)
 
-def log_trade(info):
-    print(f"[{datetime.datetime.now()}] {info}")
-    with open("trade_log.txt", "a") as f:
-        f.write(f"[{datetime.datetime.now()}] {info}\n")
+# Util to log and print
+def log_event(message):
+    print(message)
+    logging.info(message)
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.json
-    pair = data.get("pair")
-    side = data.get("side")  # "buy" or "sell"
-    qty_percent = float(data.get("position_size", "100").replace('%', '')) / 100
-
+# Helper: Parse TradingView's 4-in-1 alert string
+def parse_alert(data):
     try:
-        balance = exchange.fetch_balance()
-        usdt = balance['total']['USDT']
-        ticker = exchange.fetch_ticker(pair)
-        price = ticker['last']
-        qty = (usdt * qty_percent) / price
-        qty = round(qty, 5)
+        payload = data.get("content") or data
+        if isinstance(payload, str):
+            payload = payload.strip()
 
-        if side == "buy":
-            order = exchange.create_market_buy_order(pair, qty)
-        elif side == "sell":
-            order = exchange.create_market_sell_order(pair, qty)
-        else:
-            return jsonify({"error": "Invalid side"}), 400
+        parts = payload.split(";")
+        alert_data = {}
 
-        log_trade(f"{side.upper()} {pair} | Qty: {qty} | Price: {price}")
-        return jsonify({"success": True, "order": order})
+        for part in parts:
+            if "=" in part:
+                key, value = part.strip().split("=", 1)
+                alert_data[key.strip().lower()] = value.strip()
+
+        return alert_data
+    except Exception as e:
+        log_event(f"❌ Failed to parse alert: {e}")
+        return None
+
+# Main webhook route
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        log_event(f"📩 Received raw alert: {data}")
+
+        alert = parse_alert(data)
+        if not alert:
+            return jsonify({"error": "Invalid alert format"}), 400
+
+        # Log parsed data
+        log_event(f"✅ Parsed alert: {alert}")
+
+        # Example action (you can replace this)
+        symbol = alert.get("symbol")
+        side = alert.get("side")
+        tf = alert.get("tf")
+        signal = alert.get("signal")
+        log_event(f"⚡ Action: {side} signal on {symbol} ({tf}) - {signal}")
+
+        return jsonify({"status": "ok"}), 200
 
     except Exception as e:
-        log_trade(f"ERROR: {e}")
+        log_event(f"❌ Webhook error: {e}")
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    app.run()
+# Health check (optional)
+@app.route("/", methods=["GET"])
+def root():
+    return "TradingView Webhook Receiver Online ✅", 200
+
+# Run app
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
