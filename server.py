@@ -49,7 +49,11 @@ def parse_alert(data):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json(force=True)
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.data.decode("utf-8")
+
         log_event(f"📩 Received raw alert: {data}")
 
         alert = parse_alert(data)
@@ -59,7 +63,7 @@ def webhook():
         # Log parsed data
         log_event(f"✅ Parsed alert: {alert}")
 
-        # Example action (you can replace this)
+        # Example action
         symbol = alert.get("symbol")
         side = alert.get("side")
         tf = alert.get("tf")
@@ -72,7 +76,6 @@ def webhook():
         log_event(f"❌ Webhook error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# Health check (optional)
 @app.route("/", methods=["GET"])
 def root():
     return "TradingView Webhook Receiver Online ✅", 200
